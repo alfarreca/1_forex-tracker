@@ -16,6 +16,7 @@ PAIRS = {
     "EUR/CNY": "EURCNY=X",   # CNY per 1 EUR
     "EUR/AUD": "EURAUD=X",   # AUD per 1 EUR
     "EUR/GBP": "EURGBP=X",   # GBP per 1 EUR
+    "EUR/JPY": "EURJPY=X",   # JPY per 1 EUR   <-- NEW
 }
 
 # ------------------------------------------------------------
@@ -104,7 +105,7 @@ def section_metrics(df: pd.DataFrame):
 # -------- FX-only impact (amount in local ccy -> EUR), for inverse-quoted pairs --------
 def fx_pl_inverse_quote(close_series: pd.Series, amount_local: float):
     """
-    For pairs quoted as LOCAL per EUR (EUR/USD, EUR/CNY, EUR/AUD, EUR/GBP):
+    For pairs quoted as LOCAL per EUR (EUR/USD, EUR/CNY, EUR/AUD, EUR/GBP, EUR/JPY):
     EUR value = LOCAL_amount / price   (since price = LOCAL per EUR).
     Returns (series_df, stats_dict) or None if not enough data.
     """
@@ -132,7 +133,7 @@ period = st.sidebar.selectbox("Time Period", list(PERIOD_MAP.keys()), index=0)
 ma_periods = st.sidebar.multiselect("Moving Averages", [5, 10, 20, 50, 100, 200], default=[20, 50])
 
 # FX impact inputs (only if relevant pairs are selected)
-usd_amount = cny_amount = aud_amount = gbp_amount = None
+usd_amount = cny_amount = aud_amount = gbp_amount = jpy_amount = None
 if "EUR/USD" in selected:
     usd_amount = st.sidebar.number_input("USD amount (EUR/USD)", min_value=100.0, value=1000.0, step=100.0)
 if "EUR/CNY" in selected:
@@ -141,6 +142,8 @@ if "EUR/AUD" in selected:
     aud_amount = st.sidebar.number_input("AUD amount (EUR/AUD)", min_value=100.0, value=1500.0, step=100.0)
 if "EUR/GBP" in selected:
     gbp_amount = st.sidebar.number_input("GBP amount (EUR/GBP)", min_value=50.0, value=750.0, step=50.0)
+if "EUR/JPY" in selected:
+    jpy_amount = st.sidebar.number_input("JPY amount (EUR/JPY)", min_value=5000.0, value=100000.0, step=5000.0)
 
 # ------------------------------------------------------------
 # Fetch
@@ -186,7 +189,6 @@ for name, df in data_map.items():
                 c2.metric("End (EUR)", fmt_num(stats["end_eur"], 2))
                 sign = "+" if stats["abs_pl_eur"] >= 0 else ""
                 c3.metric("P/L (FX)", f"{sign}{fmt_num(stats['abs_pl_eur'], 2)} EUR", f"{fmt_num(stats['pct_pl'], 2)}%")
-
                 fx_fig = go.Figure()
                 fx_fig.add_trace(go.Scatter(x=eur_df.index, y=eur_df["EUR_Value"], name=f"EUR value of ${int(usd_amount)}"))
                 fx_fig.update_layout(template="plotly_dark", height=260, margin=dict(l=20, r=20, t=20, b=20))
@@ -204,9 +206,8 @@ for name, df in data_map.items():
                 c2.metric("End (EUR)", fmt_num(stats["end_eur"], 2))
                 sign = "+" if stats["abs_pl_eur"] >= 0 else ""
                 c3.metric("P/L (FX)", f"{sign}{fmt_num(stats['abs_pl_eur'], 2)} EUR", f"{fmt_num(stats['pct_pl'], 2)}%")
-
                 fx_fig = go.Figure()
-                fx_fig.add_trace(go.Scatter(x=eur_df.index, y=eur_df["EUR_Value"], name=f"EUR value of ¥{int(cny_amount)}"))
+                fx_fig.add_trace(go.Scatter(x=eur_df.index, y=eur_df["EUR_Value"], name=f"EUR value of ¥{int(cny_amount)} (CNY)"))
                 fx_fig.update_layout(template="plotly_dark", height=260, margin=dict(l=20, r=20, t=20, b=20))
                 fx_fig.update_yaxes(title_text="EUR")
                 st.plotly_chart(fx_fig, use_container_width=True)
@@ -222,7 +223,6 @@ for name, df in data_map.items():
                 c2.metric("End (EUR)", fmt_num(stats["end_eur"], 2))
                 sign = "+" if stats["abs_pl_eur"] >= 0 else ""
                 c3.metric("P/L (FX)", f"{sign}{fmt_num(stats['abs_pl_eur'], 2)} EUR", f"{fmt_num(stats['pct_pl'], 2)}%")
-
                 fx_fig = go.Figure()
                 fx_fig.add_trace(go.Scatter(x=eur_df.index, y=eur_df["EUR_Value"], name=f"EUR value of A${int(aud_amount)}"))
                 fx_fig.update_layout(template="plotly_dark", height=260, margin=dict(l=20, r=20, t=20, b=20))
@@ -240,10 +240,26 @@ for name, df in data_map.items():
                 c2.metric("End (EUR)", fmt_num(stats["end_eur"], 2))
                 sign = "+" if stats["abs_pl_eur"] >= 0 else ""
                 c3.metric("P/L (FX)", f"{sign}{fmt_num(stats['abs_pl_eur'], 2)} EUR", f"{fmt_num(stats['pct_pl'], 2)}%")
-
                 fx_fig = go.Figure()
                 fx_fig.add_trace(go.Scatter(x=eur_df.index, y=eur_df["EUR_Value"], name=f"EUR value of £{int(gbp_amount)}"))
                 fx_fig.update_layout(template="plotly_dark", height=260, margin=dict(l=20, r=20, t=20, b=20))
                 fx_fig.update_yaxes(title_text="EUR")
                 st.plotly_chart(fx_fig, use_container_width=True)
                 st.caption("FX effect only — excludes any change in the underlying British asset price.")
+
+        if name == "EUR/JPY" and jpy_amount:
+            res = fx_pl_inverse_quote(df["Close"], jpy_amount)
+            if res:
+                eur_df, stats = res
+                st.markdown("**💶 JPY asset → EUR (FX-only)**")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Start (EUR)", fmt_num(stats["start_eur"], 2))
+                c2.metric("End (EUR)", fmt_num(stats["end_eur"], 2))
+                sign = "+" if stats["abs_pl_eur"] >= 0 else ""
+                c3.metric("P/L (FX)", f"{sign}{fmt_num(stats['abs_pl_eur'], 2)} EUR", f"{fmt_num(stats['pct_pl'], 2)}%")
+                fx_fig = go.Figure()
+                fx_fig.add_trace(go.Scatter(x=eur_df.index, y=eur_df["EUR_Value"], name=f"EUR value of ¥{int(jpy_amount)} (JPY)"))
+                fx_fig.update_layout(template="plotly_dark", height=260, margin=dict(l=20, r=20, t=20, b=20))
+                fx_fig.update_yaxes(title_text="EUR")
+                st.plotly_chart(fx_fig, use_container_width=True)
+                st.caption("FX effect only — excludes any change in the underlying Japanese asset price.")
