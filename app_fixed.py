@@ -19,8 +19,8 @@ st.markdown("""
 
 PERIOD_MAP = {"1M":"1mo","3M":"3mo","6M":"6mo","1Y":"1y","2Y":"2y","5Y":"5y"}
 PAIRS = {
-    "EUR/USD":"EURUSD=X",
-    "EUR/CNY":"EURCNY=X",
+    "EUR/USD":"EURUSD=X",   # USD per 1 EUR
+    "EUR/CNY":"EURCNY=X",   # CNY per 1 EUR
     "EUR/AUD":"EURAUD=X",
     "EUR/GBP":"EURGBP=X",
 }
@@ -104,15 +104,34 @@ def section_metrics(df: pd.DataFrame):
     with c3: st.metric("High", fmt_num(df["High"].max() if "High" in df else np.nan, 4))
     with c4: st.metric("Low", fmt_num(df["Low"].min() if "Low" in df else np.nan, 4))
 
+# ---------- FX P/L calculators ----------
 def fx_pl_from_eurusd(close_series: pd.Series, usd_amount: float = 1000.0):
     """
-    Compute the FX-only impact on converting a USD amount into EUR over time,
-    using EURUSD=X (USD per 1 EUR). EUR value = USD / EURUSD.
+    FX-only impact for converting a USD amount to EUR using EURUSD=X (USD per EUR).
+    EUR value = USD / EURUSD.
     """
     s = close_series.dropna().astype(float)
     if s.empty or len(s) < 2:
         return None
     eur_series = usd_amount / s
+    start_eur = eur_series.iloc[0]
+    end_eur   = eur_series.iloc[-1]
+    abs_pl_eur = float(end_eur - start_eur)
+    pct_pl     = (end_eur / start_eur - 1.0) * 100.0
+    out = pd.DataFrame({"EUR_Value": eur_series})
+    stats = {"start_eur": start_eur, "end_eur": end_eur,
+             "abs_pl_eur": abs_pl_eur, "pct_pl": pct_pl}
+    return out, stats
+
+def fx_pl_from_eurcny(close_series: pd.Series, cny_amount: float = 7000.0):
+    """
+    FX-only impact for converting a CNY amount to EUR using EURCNY=X (CNY per EUR).
+    EUR value = CNY / EURCNY.
+    """
+    s = close_series.dropna().astype(float)
+    if s.empty or len(s) < 2:
+        return None
+    eur_series = cny_amount / s
     start_eur = eur_series.iloc[0]
     end_eur   = eur_series.iloc[-1]
     abs_pl_eur = float(end_eur - start_eur)
@@ -132,10 +151,13 @@ selected = st.sidebar.multiselect("Select Currency Pairs:", list(PAIRS.keys()), 
 period = st.sidebar.selectbox("Time Period:", list(PERIOD_MAP.keys()), index=0)
 ma_periods = st.sidebar.multiselect("Moving Averages:", [5,10,20,50,100,200], default=[20,50])
 
-# FX impact control (only relevant when EUR/USD is shown)
+# FX impact inputs (show only if relevant pair is selected)
 usd_amount = None
+cny_amount = None
 if "EUR/USD" in selected:
     usd_amount = st.sidebar.number_input("USD amount for FX impact (EUR/USD)", min_value=100.0, value=1000.0, step=100.0)
+if "EUR/CNY" in selected:
+    cny_amount = st.sidebar.number_input("CNY amount for FX impact (EUR/CNY)", min_value=1000.0, value=7000.0, step=500.0)
 
 auto_refresh = st.sidebar.checkbox("Auto-refresh every 5 minutes", value=False)
 if auto_refresh:
@@ -180,7 +202,7 @@ for col, (name, df) in zip(cols, data_map.items()):
         st.markdown(f'<div class="currency-card"><h4>{name}</h4><h2>{fmt_num(last,4)}</h2></div>', unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# Charts + metrics (+ FX impact for EUR/USD)
+# Charts + metrics + FX impacts
 # ------------------------------------------------------------
 st.subheader("📈 Price Charts with Moving Averages")
 for name, df in data_map.items():
@@ -190,7 +212,7 @@ for name, df in data_map.items():
             st.plotly_chart(fig, use_container_width=True)
             section_metrics(df)
 
-            # --- FX-only impact for EUR/USD ---
+            # --- FX-only impact for EUR/USD (USD -> EUR) ---
             if name == "EUR/USD" and usd_amount:
                 res = fx_pl_from_eurusd(df["Close"], usd_amount)
                 if res is not None:
@@ -209,6 +231,26 @@ for name, df in data_map.items():
                     fx_fig.update_yaxes(title_text="EUR")
                     st.plotly_chart(fx_fig, use_container_width=True)
                     st.caption("FX effect only — excludes any change in the underlying US asset price.")
+
+            # --- FX-only impact for EUR/CNY (CNY -> EUR) ---
+            if name == "EUR/CNY" and cny_amount:
+                res = fx_pl_from_eurcny(df["Close"], cny_amount)
+                if res is not None:
+                    eur_df, stats = res
+                    st.markdown("**💶 FX-only impact on a CNY asset (converted to EUR)**")
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Start (EUR)", fmt_num(stats["start_eur"], 2))
+                    c2.metric("End (EUR)",   fmt_num(stats["end_eur"], 2))
+                    sign = "+" if stats["abs_pl_eur"] >= 0 else ""
+                    c3.metric("P/L (FX only)", f"{sign}{fmt_num(stats['abs_pl_eur'], 2)} EUR",
+                              f"{fmt_num(stats['pct_pl'], 2)}%")
+                    fx_fig = go.Figure()
+                    fx_fig.add_trace(go.Scatter(x=eur_df.index, y=eur_df["EUR_Value"],
+                                                name=f"EUR value of ¥{int(cny_amount)}"))
+                    fx_fig.update_layout(height=260, margin=dict(l=20,r=20,t=20,b=20))
+                    fx_fig.update_yaxes(title_text="EUR")
+                    st.plotly_chart(fx_fig, use_container_width=True)
+                    st.caption("FX effect only — excludes any change in the underlying Chinese asset price.")
 
         except Exception as e:
             st.error(f"Error creating chart for {name}: {e}")
