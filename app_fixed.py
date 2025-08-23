@@ -17,7 +17,7 @@ PAIRS = {
     "EUR/AUD": "EURAUD=X",   # AUD per 1 EUR
     "EUR/GBP": "EURGBP=X",   # GBP per 1 EUR
     "EUR/JPY": "EURJPY=X",   # JPY per 1 EUR
-    "EUR/SEK": "EURSEK=X",   # SEK per 1 EUR  <-- NEW
+    "EUR/SEK": "EURSEK=X",   # SEK per 1 EUR
 }
 
 # ------------------------------------------------------------
@@ -48,17 +48,31 @@ def get_history(ticker: str, period: str) -> pd.DataFrame:
         hist = hist[hist["Close"].notna()]
     return hist
 
-def make_chart(df: pd.DataFrame, title: str, ma_periods, period: str):
-    """Main chart with MAs + volume, dark via plotly template."""
-    fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
-        subplot_titles=(f"{title} Price", "Volume"), row_width=[0.25, 0.75]
-    )
+def transform_series(s: pd.Series, mode: str):
+    """
+    Transform a price series based on normalization mode.
+    - 'Actual' -> unchanged, ylabel 'Price'
+    - 'Normalized to 100' -> s / s0 * 100, ylabel 'Index (100=start)'
+    - 'Percent change (%)' -> (s / s0 - 1) * 100, ylabel '% from start'
+    """
+    s = s.dropna().astype(float)
+    if s.empty:
+        return s, "Price"
+    s0 = s.iloc[0]
+    if mode == "Actual" or s0 == 0:
+        return s, "Price"
+    if mode == "Normalized to 100":
+        return (s / s0) * 100.0, "Index (100 = start)"
+    if mode == "Percent change (%)":
+        return (s / s0 - 1.0) * 100.0, "% from start"
+    return s, "Price"
 
-    # Price
-    fig.add_trace(go.Scatter(x=df.index, y=df["Close"], name="Price"), row=1, col=1)
+def make_chart(df: pd.DataFrame, title: str, ma_periods, period: str, norm_mode: str):
+    """Main chart with MAs + volume, dark via plotly template, with normalization modes."""
+    price_transformed, y_label = transform_series(df["Close"], norm_mode)
 
-    # MAs
+    # For MAs: compute on raw prices, then transform with the SAME baseline as price
+    ma_series = []
     for p in ma_periods:
         try:
             p = int(p)
@@ -66,14 +80,27 @@ def make_chart(df: pd.DataFrame, title: str, ma_periods, period: str):
             continue
         if len(df) == 0:
             continue
-        minp = 1 if period == "1M" else p  # show MAs on short windows
-        ma = df["Close"].rolling(p, min_periods=minp).mean()
+        minp = 1 if period == "1M" else p
+        ma_raw = df["Close"].rolling(p, min_periods=minp).mean()
+        ma_t, _ = transform_series(ma_raw, norm_mode)
+        ma_series.append((p, ma_t))
+
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
+        subplot_titles=(f"{title} ({norm_mode})", "Volume"), row_width=[0.25, 0.75]
+    )
+
+    # Price
+    fig.add_trace(go.Scatter(x=price_transformed.index, y=price_transformed, name="Price"), row=1, col=1)
+
+    # MAs
+    for p, m in ma_series:
         fig.add_trace(
-            go.Scatter(x=df.index, y=ma, name=f"MA{p}", line=dict(dash="dot")),
+            go.Scatter(x=m.index, y=m, name=f"MA{p}", line=dict(dash="dot")),
             row=1, col=1
         )
 
-    # Volume
+    # Volume (only meaningful in Actual scale, but we keep it for context)
     if "Volume" in df.columns and df["Volume"].notna().any():
         fig.add_trace(
             go.Bar(x=df.index, y=df["Volume"].fillna(0), name="Volume", opacity=0.5),
@@ -86,7 +113,7 @@ def make_chart(df: pd.DataFrame, title: str, ma_periods, period: str):
         legend=dict(orientation="h", x=1, xanchor="right", y=1.08),
         margin=dict(l=20, r=20, t=40, b=20)
     )
-    fig.update_yaxes(title_text="Price", row=1, col=1)
+    fig.update_yaxes(title_text=y_label, row=1, col=1)
     fig.update_yaxes(title_text="Volume", row=2, col=1)
     return fig
 
@@ -132,6 +159,8 @@ st.sidebar.header("⚙️ Settings")
 selected = st.sidebar.multiselect("Select Currency Pairs", list(PAIRS.keys()), default=list(PAIRS.keys()))
 period = st.sidebar.selectbox("Time Period", list(PERIOD_MAP.keys()), index=0)
 ma_periods = st.sidebar.multiselect("Moving Averages", [5, 10, 20, 50, 100, 200], default=[20, 50])
+norm_mode = st.sidebar.selectbox("Chart scale", ["Actual", "Normalized to 100", "Percent change (%)"], index=0)
+show_comparison = st.sidebar.checkbox("Show normalized comparison chart", value=True)
 
 # FX impact inputs (only if relevant pairs are selected)
 usd_amount = cny_amount = aud_amount = gbp_amount = jpy_amount = sek_amount = None
@@ -172,16 +201,31 @@ for col, (name, df) in zip(cols, data_map.items()):
         st.metric(name, fmt_num(last, 4))
 
 # ------------------------------------------------------------
-# Charts + FX impact
+# Optional: Normalized comparison across selected pairs
+# ------------------------------------------------------------
+if show_comparison and len(data_map) > 1:
+    st.subheader("📊 Normalized Comparison (Index 100 = start)")
+    comp_fig = go.Figure()
+    for name, df in data_map.items():
+        norm, _ = transform_series(df["Close"], "Normalized to 100")
+        if norm.empty: 
+            continue
+        comp_fig.add_trace(go.Scatter(x=norm.index, y=norm, name=name))
+    comp_fig.update_layout(template="plotly_dark", height=420, legend=dict(orientation="h", x=1, xanchor="right"))
+    comp_fig.update_yaxes(title_text="Index (100 = start)")
+    st.plotly_chart(comp_fig, use_container_width=True)
+
+# ------------------------------------------------------------
+# Per-pair charts + FX impact
 # ------------------------------------------------------------
 st.subheader("📈 Price Charts with Moving Averages")
 for name, df in data_map.items():
     with st.expander(f"{name} Chart", expanded=True):
-        fig = make_chart(df, name, ma_periods, period)
+        fig = make_chart(df, name, ma_periods, period, norm_mode)
         st.plotly_chart(fig, use_container_width=True)
         section_metrics(df)
 
-        # FX-only impact blocks (LOCAL -> EUR)
+        # FX-only impact blocks (LOCAL -> EUR), shown regardless of normalization mode
         if name == "EUR/USD" and usd_amount:
             res = fx_pl_inverse_quote(df["Close"], usd_amount)
             if res:
