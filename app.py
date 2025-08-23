@@ -74,7 +74,7 @@ def main():
     )
     
     # Update frequency
-    auto_refresh = st.sidebar.checkbox("Auto-refresh every 5 minutes", value=True)
+    auto_refresh = st.sidebar.checkbox("Auto-refresh every 5 minutes", value=False)
     
     if auto_refresh:
         st.sidebar.info("Next update: " + (datetime.now() + timedelta(minutes=5)).strftime("%H:%M:%S"))
@@ -91,66 +91,112 @@ def main():
     all_data = {}
     current_prices = {}
     
-    for i, (pair_name, pair_code) in enumerate([(k, v) for k, v in currency_pairs.items() if k in selected_pairs]):
+    for i, pair_name in enumerate(selected_pairs):
+        pair_code = currency_pairs[pair_name]
         status_text.text(f"Fetching data for {pair_name}...")
         try:
             data = fetch_forex_data(pair_code, period)
-            if data is not None:
+            if data is not None and not data.empty:
                 all_data[pair_name] = data
-                current_prices[pair_name] = data['Close'].iloc[-1]
+                # Safely get the last close price
+                if 'Close' in data.columns and len(data) > 0:
+                    current_prices[pair_name] = data['Close'].iloc[-1]
+                else:
+                    current_prices[pair_name] = None
+                    st.warning(f"No price data available for {pair_name}")
+            else:
+                current_prices[pair_name] = None
+                st.warning(f"No data returned for {pair_name}")
+            
             progress_bar.progress((i + 1) / len(selected_pairs))
+            
         except Exception as e:
             st.error(f"Error fetching {pair_name}: {str(e)}")
+            current_prices[pair_name] = None
     
     progress_bar.empty()
     status_text.empty()
     
     if not all_data:
-        st.error("No data could be fetched. Please check your internet connection.")
+        st.error("No data could be fetched. Please check your internet connection or try again later.")
         return
     
-    # Display current prices
+    # Display current prices - with safe formatting
     st.subheader("📊 Current Exchange Rates")
-    cols = st.columns(len(selected_pairs))
     
-    for col, (pair_name, price) in zip(cols, current_prices.items()):
-        with col:
-            st.markdown(f"""
-            <div class="currency-card">
-                <h3>{pair_name}</h3>
-                <h2>{price:.4f}</h2>
-            </div>
-            """, unsafe_allow_html=True)
+    # Filter out None values
+    valid_prices = {k: v for k, v in current_prices.items() if v is not None}
+    
+    if valid_prices:
+        cols = st.columns(len(valid_prices))
+        
+        for col, (pair_name, price) in zip(cols, valid_prices.items()):
+            with col:
+                # Safe formatting with error handling
+                try:
+                    formatted_price = f"{float(price):.4f}"
+                except (TypeError, ValueError):
+                    formatted_price = "N/A"
+                
+                st.markdown(f"""
+                <div class="currency-card">
+                    <h3>{pair_name}</h3>
+                    <h2>{formatted_price}</h2>
+                </div>
+                """, unsafe_allow_html=True)
+    else:
+        st.warning("No current prices available for the selected pairs.")
     
     # Display charts
     st.subheader("📈 Price Charts with Moving Averages")
     
     for pair_name, data in all_data.items():
         with st.expander(f"{pair_name} Chart", expanded=True):
-            fig = create_chart(data, pair_name, ma_periods)
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Display statistics
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Current", f"{data['Close'].iloc[-1]:.4f}")
-            with col2:
-                change = ((data['Close'].iloc[-1] - data['Close'].iloc[0]) / data['Close'].iloc[0]) * 100
-                st.metric("Total Change", f"{change:+.2f}%")
-            with col3:
-                st.metric("High", f"{data['High'].max():.4f}")
-            with col4:
-                st.metric("Low", f"{data['Low'].min():.4f}")
+            try:
+                fig = create_chart(data, pair_name, ma_periods)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Display statistics with error handling
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    current_price = data['Close'].iloc[-1] if 'Close' in data.columns and len(data) > 0 else "N/A"
+                    if isinstance(current_price, (int, float)):
+                        st.metric("Current", f"{current_price:.4f}")
+                    else:
+                        st.metric("Current", current_price)
+                
+                with col2:
+                    if 'Close' in data.columns and len(data) > 1:
+                        change = ((data['Close'].iloc[-1] - data['Close'].iloc[0]) / data['Close'].iloc[0]) * 100
+                        st.metric("Total Change", f"{change:+.2f}%")
+                    else:
+                        st.metric("Total Change", "N/A")
+                
+                with col3:
+                    if 'High' in data.columns:
+                        st.metric("High", f"{data['High'].max():.4f}" if len(data) > 0 else "N/A")
+                    else:
+                        st.metric("High", "N/A")
+                
+                with col4:
+                    if 'Low' in data.columns:
+                        st.metric("Low", f"{data['Low'].min():.4f}" if len(data) > 0 else "N/A")
+                    else:
+                        st.metric("Low", "N/A")
+                        
+            except Exception as e:
+                st.error(f"Error creating chart for {pair_name}: {str(e)}")
     
     # Auto-refresh logic
     if auto_refresh:
-        st.sidebar.button("🔄 Refresh Now")
-        st.balloons()
+        if st.sidebar.button("🔄 Refresh Now"):
+            st.rerun()
 
 def fetch_forex_data(pair_code, period):
-    """Fetch forex data from Yahoo Finance"""
+    """Fetch forex data from Yahoo Finance with error handling"""
     try:
-        # Map period to days
+        # Map period to Yahoo Finance format
         period_map = {
             "1M": "1mo",
             "3M": "3mo", 
@@ -160,13 +206,25 @@ def fetch_forex_data(pair_code, period):
             "5Y": "5y"
         }
         
-        data = yf.download(pair_code, period=period_map[period])
-        if data.empty:
+        data = yf.download(pair_code, period=period_map[period], progress=False)
+        
+        # Validate data
+        if data is None or data.empty:
+            st.warning(f"No data returned for {pair_code}")
             return None
         
+        # Check if we have the required columns
+        required_columns = ['Close', 'High', 'Low', 'Volume']
+        missing_columns = [col for col in required_columns if col not in data.columns]
+        
+        if missing_columns:
+            st.warning(f"Missing columns for {pair_code}: {missing_columns}")
+            return None
+            
         return data
+        
     except Exception as e:
-        st.error(f"Error fetching data: {str(e)}")
+        st.error(f"Error downloading {pair_code}: {str(e)}")
         return None
 
 def create_chart(data, pair_name, ma_periods):
@@ -205,17 +263,18 @@ def create_chart(data, pair_name, ma_periods):
                 row=1, col=1
             )
     
-    # Volume
-    fig.add_trace(
-        go.Bar(
-            x=data.index,
-            y=data['Volume'],
-            name='Volume',
-            marker_color='#7f7f7f',
-            opacity=0.5
-        ),
-        row=2, col=1
-    )
+    # Volume (if available)
+    if 'Volume' in data.columns:
+        fig.add_trace(
+            go.Bar(
+                x=data.index,
+                y=data['Volume'],
+                name='Volume',
+                marker_color='#7f7f7f',
+                opacity=0.5
+            ),
+            row=2, col=1
+        )
     
     # Update layout
     fig.update_layout(
