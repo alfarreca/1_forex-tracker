@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
 import yfinance as yf
 
 # ------------------------------------------------------------
@@ -41,15 +40,11 @@ st.markdown("""
         background-color: #161b22 !important;
         color: #fafafa !important;
     }
-    /* Sidebar labels */
     section[data-testid="stSidebar"] label {
         color: #fafafa !important;
     }
     /* Inputs & select boxes */
-    .stSelectbox div[data-baseweb="select"] > div {
-        background-color: #1c1f26;
-        color: #fafafa;
-    }
+    .stSelectbox div[data-baseweb="select"] > div,
     .stMultiSelect div[data-baseweb="select"] > div {
         background-color: #1c1f26;
         color: #fafafa;
@@ -111,9 +106,14 @@ def make_chart(df: pd.DataFrame, title: str, ma_periods, period: str):
         fig.add_trace(go.Scatter(x=df.index, y=ma, name=f"MA{p}", line=dict(dash="dot")), row=1, col=1)
     # Volume
     if "Volume" in df.columns and df["Volume"].notna().any():
-        fig.add_trace(go.Bar(x=df.index, y=df["Volume"].fillna(0), name="Volume", marker_color="#666"), row=2, col=1)
+        fig.add_trace(go.Bar(x=df.index, y=df["Volume"].fillna(0), name="Volume", marker_color="#888"), row=2, col=1)
+
+    # Dark theme
     fig.update_layout(
         template="plotly_dark",
+        paper_bgcolor="#0e1117",
+        plot_bgcolor="#0e1117",
+        font=dict(color="#fafafa"),
         height=560,
         legend=dict(orientation="h", x=1, xanchor="right", y=1.08),
         margin=dict(l=20,r=20,t=40,b=20)
@@ -212,8 +212,16 @@ for name,df in data_map.items():
         sign="+" if stats["abs_pl_eur"]>=0 else ""
         c3.metric("P/L (FX only)", f"{sign}{fmt_num(stats['abs_pl_eur'],2)} EUR", f"{fmt_num(stats['pct_pl'],2)}%")
 
+        # Dark mini chart
         fx_fig=go.Figure()
-        fx_fig.add_trace(go.Scatter(x=eur_df.index,y=eur_df["EUR_Value"],name="EUR Value"))
-        fx_fig.update_layout(template="plotly_dark",height=260,margin=dict(l=20,r=20,t=20,b=20))
+        fx_fig.add_trace(go.Scatter(x=eur_df.index,y=eur_df["EUR_Value"],name="EUR Value", line=dict(color="#1DB954")))
+        fx_fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#0e1117",
+            plot_bgcolor="#0e1117",
+            font=dict(color="#fafafa"),
+            height=260,
+            margin=dict(l=20,r=20,t=20,b=20)
+        )
         fx_fig.update_yaxes(title_text="EUR")
         st.plotly_chart(fx_fig,use_container_width=True)
