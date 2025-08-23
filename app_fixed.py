@@ -15,7 +15,7 @@ PAIRS = {
     "EUR/USD": "EURUSD=X",   # USD per 1 EUR
     "EUR/CNY": "EURCNY=X",   # CNY per 1 EUR
     "EUR/AUD": "EURAUD=X",   # AUD per 1 EUR
-    "EUR/GBP": "EURGBP=X",
+    "EUR/GBP": "EURGBP=X",   # GBP per 1 EUR
 }
 
 # ------------------------------------------------------------
@@ -47,19 +47,16 @@ def get_history(ticker: str, period: str) -> pd.DataFrame:
     return hist
 
 def make_chart(df: pd.DataFrame, title: str, ma_periods, period: str):
-    """Main OHLC-derived chart with MAs + volume, dark via plotly template."""
+    """Main chart with MAs + volume, dark via plotly template."""
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
         subplot_titles=(f"{title} Price", "Volume"), row_width=[0.25, 0.75]
     )
 
     # Price
-    fig.add_trace(
-        go.Scatter(x=df.index, y=df["Close"], name="Price"),
-        row=1, col=1
-    )
+    fig.add_trace(go.Scatter(x=df.index, y=df["Close"], name="Price"), row=1, col=1)
 
-    # Moving averages
+    # MAs
     for p in ma_periods:
         try:
             p = int(p)
@@ -81,7 +78,6 @@ def make_chart(df: pd.DataFrame, title: str, ma_periods, period: str):
             row=2, col=1
         )
 
-    # Dark charts (respect app theme colors)
     fig.update_layout(
         template="plotly_dark",
         height=560,
@@ -105,11 +101,11 @@ def section_metrics(df: pd.DataFrame):
     with c3: st.metric("High", fmt_num(df["High"].max() if "High" in df else np.nan, 4))
     with c4: st.metric("Low", fmt_num(df["Low"].min() if "Low" in df else np.nan, 4))
 
-# -------- FX-only impact calculators (amount in local ccy -> EUR) --------
+# -------- FX-only impact (amount in local ccy -> EUR), for inverse-quoted pairs --------
 def fx_pl_inverse_quote(close_series: pd.Series, amount_local: float):
     """
-    For pairs quoted as LOCAL per EUR (EUR/USD, EUR/CNY, EUR/AUD):
-    EUR value = LOCAL_amount / (LOCAL per EUR) = amount / price.
+    For pairs quoted as LOCAL per EUR (EUR/USD, EUR/CNY, EUR/AUD, EUR/GBP):
+    EUR value = LOCAL_amount / price   (since price = LOCAL per EUR).
     Returns (series_df, stats_dict) or None if not enough data.
     """
     s = close_series.dropna().astype(float)
@@ -135,14 +131,16 @@ selected = st.sidebar.multiselect("Select Currency Pairs", list(PAIRS.keys()), d
 period = st.sidebar.selectbox("Time Period", list(PERIOD_MAP.keys()), index=0)
 ma_periods = st.sidebar.multiselect("Moving Averages", [5, 10, 20, 50, 100, 200], default=[20, 50])
 
-# FX impact inputs only if relevant pairs are selected
-usd_amount = cny_amount = aud_amount = None
+# FX impact inputs (only if relevant pairs are selected)
+usd_amount = cny_amount = aud_amount = gbp_amount = None
 if "EUR/USD" in selected:
     usd_amount = st.sidebar.number_input("USD amount (EUR/USD)", min_value=100.0, value=1000.0, step=100.0)
 if "EUR/CNY" in selected:
     cny_amount = st.sidebar.number_input("CNY amount (EUR/CNY)", min_value=1000.0, value=7000.0, step=500.0)
 if "EUR/AUD" in selected:
     aud_amount = st.sidebar.number_input("AUD amount (EUR/AUD)", min_value=100.0, value=1500.0, step=100.0)
+if "EUR/GBP" in selected:
+    gbp_amount = st.sidebar.number_input("GBP amount (EUR/GBP)", min_value=50.0, value=750.0, step=50.0)
 
 # ------------------------------------------------------------
 # Fetch
@@ -231,3 +229,21 @@ for name, df in data_map.items():
                 fx_fig.update_yaxes(title_text="EUR")
                 st.plotly_chart(fx_fig, use_container_width=True)
                 st.caption("FX effect only — excludes any change in the underlying Australian asset price.")
+
+        if name == "EUR/GBP" and gbp_amount:
+            res = fx_pl_inverse_quote(df["Close"], gbp_amount)
+            if res:
+                eur_df, stats = res
+                st.markdown("**💶 GBP asset → EUR (FX-only)**")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Start (EUR)", fmt_num(stats["start_eur"], 2))
+                c2.metric("End (EUR)", fmt_num(stats["end_eur"], 2))
+                sign = "+" if stats["abs_pl_eur"] >= 0 else ""
+                c3.metric("P/L (FX)", f"{sign}{fmt_num(stats['abs_pl_eur'], 2)} EUR", f"{fmt_num(stats['pct_pl'], 2)}%")
+
+                fx_fig = go.Figure()
+                fx_fig.add_trace(go.Scatter(x=eur_df.index, y=eur_df["EUR_Value"], name=f"EUR value of £{int(gbp_amount)}"))
+                fx_fig.update_layout(template="plotly_dark", height=260, margin=dict(l=20, r=20, t=20, b=20))
+                fx_fig.update_yaxes(title_text="EUR")
+                st.plotly_chart(fx_fig, use_container_width=True)
+                st.caption("FX effect only — excludes any change in the underlying British asset price.")
